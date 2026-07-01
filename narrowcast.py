@@ -15,17 +15,29 @@ from broadcast import record
 STATE_FILE = line_api.DATA_DIR / "active_list.json"
 
 
+# LINE caps a narrowcast recipient at 10 audiences in an `or` operator — go over and the
+# whole send fails with 400 "audience can not be used more than 10 times".
+LINE_AUDIENCE_CAP = 10
+
+
 def active_audience_ids():
-    """Group A id + every non-frozen impression-audience id, from active_list state."""
+    """Group A id + the newest non-frozen impression-audience ids, capped at LINE's limit.
+
+    The active list grows by one impression audience per broadcast, so it eventually exceeds
+    LINE's 10-audience cap. Impression audiences overlap heavily (repeat openers), so we keep
+    Group A plus the most-recent impression audiences (newest = most engaged) up to the cap.
+    """
     if not STATE_FILE.exists():
         return []
     st = json.loads(STATE_FILE.read_text())
     ids = []
     if st.get("group_a_id"):
         ids.append(int(st["group_a_id"]))
-    for b in st.get("broadcasts", {}).values():
-        if not b.get("frozen") and b.get("imp_group_id"):
-            ids.append(int(b["imp_group_id"]))
+    imps = [b for b in st.get("broadcasts", {}).values()
+            if not b.get("frozen") and b.get("imp_group_id")]
+    imps.sort(key=lambda b: b.get("sent_ts", 0), reverse=True)
+    for b in imps[:LINE_AUDIENCE_CAP - len(ids)]:
+        ids.append(int(b["imp_group_id"]))
     return ids
 
 
